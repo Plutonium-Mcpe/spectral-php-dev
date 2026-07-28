@@ -10,7 +10,7 @@ use function array_splice;
 use function count;
 use function floor;
 use function max;
-use function uasort;
+use function usort;
 
 final class AckQueue
 {
@@ -89,7 +89,14 @@ final class AckQueue
             return;
         }
 
-        uasort($this->ranges, static fn (array $a, array $b) => $a[0] <=> $b[0]);
+        // usort et non uasort : uasort conserve les cles, or la suite melange
+        // acces par cle ($this->ranges[0]) et decoupe par position
+        // (array_slice(...,1)). Les deux ne designent alors pas le meme element,
+        // et la fusion jette des plages entieres — des paquets bien recus ne
+        // sont plus jamais acquittes, l'emetteur les retransmet jusqu'a
+        // abandonner. Le pair Go trie une slice, ou index et position
+        // coincident; c'est cette equivalence qu'il faut retablir ici.
+        usort($this->ranges, static fn (array $a, array $b) => $a[0] <=> $b[0]);
         $merged = [];
         $current = $this->ranges[0];
         foreach (array_slice($this->ranges, 1) as $next) {
