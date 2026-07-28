@@ -212,7 +212,15 @@ abstract class Connection
     {
         $entry = $this->retransmission->shift($now, $this->rtt->getRTO());
         if ($entry !== null) {
-            [$sentTime, $payload] = $entry;
+            [$sentTime, $payload, $gaveUp] = $entry;
+            // Echouer bruyamment. Le paquet a epuise ses tentatives : le pair a
+            // un trou definitif et ne pourra plus jamais avancer sa fenetre.
+            // Fermer permet au proxy de redialer ; le silence d'avant laissait
+            // la connexion dans le pool a servir des transferts condamnes.
+            if ($gaveUp) {
+                $this->closeWithError(ConnectionClose::CONNECTION_CLOSE_TIMEOUT, "retransmission exhausted");
+                return;
+            }
             $this->sender->onCongestionEvent($now, $sentTime);
             $this->conn->write($payload);
         }
@@ -245,7 +253,10 @@ abstract class Connection
         }
         $stream = new Stream($this->sendQueue, $this->logger, $streamID);
         $stream->registerCloseHandler(function () use ($streamID): void {
-            $this->streams->remove($this->sequenceID);
+            // $this->sequenceID est le compteur de paquets de la connexion, pas
+            // un identifiant de stream : remove() ne touchait donc jamais rien
+            // et aucun stream ferme n'etait retire de la map.
+            $this->streams->remove($streamID);
             $this->writeControl(StreamClose::create($streamID), true);
         });
         $this->streams->add($stream, $streamID);

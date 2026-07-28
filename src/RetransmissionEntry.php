@@ -10,5 +10,6 @@ final class RetransmissionEntry
         public string $payload,
         public int    $sent,
         public int    $attempts = 0,
+        public int    $backoff = 0,
     ) {}
 }
