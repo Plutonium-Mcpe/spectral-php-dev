@@ -14,6 +14,7 @@ final class SendQueue
 {
     private array $queue = [];
     private int $mss = Protocol::MIN_PACKET_SIZE;
+    private int $queuedBytes = 0;
     private ByteBuffer $pk;
 
     public function __construct()
@@ -40,6 +41,18 @@ final class SendQueue
     public function add(string $payload): void
     {
         $this->queue[] = $payload;
+        $this->queuedBytes += strlen($payload);
+    }
+
+    /**
+     * Octets en attente d'emission. Rien ne borne cette file : l'application ecrit a sa guise
+     * tandis que `pack()` ne sort que ce que la fenetre de congestion autorise. Quand le lien
+     * vers le pair bouchonne, c'est ici que la memoire s'accumule, et l'appelant s'en sert donc
+     * comme garde-fou.
+     */
+    public function getQueuedBytes(): int
+    {
+        return $this->queuedBytes;
     }
 
     public function pack(int $window): ?string
@@ -55,6 +68,7 @@ final class SendQueue
                 break;
             }
             array_shift($this->queue);
+            $this->queuedBytes -= strlen($entry);
             $this->pk->writeByteArray($entry);
         }
         return $this->pk->toString();
@@ -72,5 +86,6 @@ final class SendQueue
         $this->pk->clear();
         $this->pk->trim();
         $this->queue = [];
+        $this->queuedBytes = 0;
     }
 }

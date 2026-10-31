@@ -24,6 +24,19 @@ abstract class Connection
 {
     private const CONNECTION_ACTIVITY_TIMEOUT = Time::SECOND * 30;
 
+    /**
+     * Plafond memoire par connexion, somme de ce qui attend d'etre emis et de ce qui attend
+     * d'etre acquitte. Aucune des deux files n'etait bornee : un pair qui cesse de lire ou
+     * d'acquitter les faisait croitre jusqu'a epuiser la memoire du thread reseau, ce qui tuait
+     * le processus entier plutot que la seule connexion fautive.
+     *
+     * 8 Mio represente environ 5 800 paquets a la MTU maximale, soit plusieurs centaines de fois
+     * ce qu'une connexion saine retient : une connexion qui atteint ce seuil n'emet deja plus
+     * depuis longtemps. Le choix est deliberement large pour ne jamais fermer un pair lent, et
+     * ne sert que de filet contre l'emballement.
+     */
+    private const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
+
     protected readonly AckQueue $ack;
     protected readonly Sender $sender;
     protected readonly ReceiveQueue $receiveQueue;
@@ -85,6 +98,11 @@ abstract class Connection
         $now = Time::unixNano();
         if ($now >= $this->idle) {
             $this->closeWithError(ConnectionClose::CONNECTION_CLOSE_TIMEOUT, "network inactivity");
+            return false;
+        }
+        $buffered = $this->sendQueue->getQueuedBytes() + $this->retransmission->getQueuedBytes();
+        if ($buffered > Connection::MAX_BUFFERED_BYTES) {
+            $this->closeWithError(ConnectionClose::CONNECTION_CLOSE_TIMEOUT, "buffer overflow: " . $buffered . " bytes");
             return false;
         }
         $this->retransmit($now);
