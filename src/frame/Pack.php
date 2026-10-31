@@ -5,47 +5,49 @@ declare(strict_types=1);
 namespace cooldogedev\spectral\frame;
 
 use cooldogedev\spectral\Protocol;
-use pmmp\encoding\ByteBuffer;
+use pmmp\encoding\ByteBufferReader;
+use pmmp\encoding\ByteBufferWriter;
+use pmmp\encoding\LE;
+use function strlen;
 
 final class Pack
 {
-    private static ?ByteBuffer $buf = null;
+    private static ?ByteBufferWriter $writeBuf = null;
 
     public static function packSingle(Frame $fr): string
     {
-        $buf = Pack::getBuffer();
-        $buf->writeUnsignedIntLE($fr->id());
+        $buf = Pack::getWriter();
+        LE::writeUnsignedInt($buf, $fr->id());
         $fr->encode($buf);
-        return $buf->toString();
+        return $buf->getData();
     }
 
     public static function pack(int $connectionID, int $sequenceID, string $frames): string
     {
-        $buf = Pack::getBuffer();
+        $buf = Pack::getWriter();
         $buf->writeByteArray(Protocol::MAGIC);
-        $buf->writeSignedLongLE($connectionID);
-        $buf->writeUnsignedIntLE($sequenceID);
+        LE::writeSignedLong($buf, $connectionID);
+        LE::writeUnsignedInt($buf, $sequenceID);
         $buf->writeByteArray($frames);
-        return $buf->toString();
+        return $buf->getData();
     }
 
     public static function unpack(string $payload): ?array
     {
-        $buf = Pack::getBuffer();
         if (strlen($payload) < Protocol::PACKET_HEADER_SIZE) {
             return null;
         }
 
-        $buf->writeByteArray($payload);
+		$buf = new ByteBufferReader($payload);
         if ($buf->readByteArray(4) !== Protocol::MAGIC) {
             return null;
         }
 
-        $connectionID = $buf->readSignedLongLE();
-        $sequenceID = $buf->readUnsignedIntLE();
+		$connectionID = LE::readSignedLong($buf);
+		$sequenceID = LE::readUnsignedInt($buf);
         $frames = [];
-        while ($buf->getUsedLength() > $buf->getReadOffset()) {
-            $fr = Pool::getFrame($buf->readUnsignedIntLE());
+        while ($buf->getUnreadLength() > 0) {
+            $fr = Pool::getFrame(LE::readUnsignedInt($buf));
             if ($fr === null) {
                 break;
             }
@@ -55,14 +57,13 @@ final class Pack
         return [$connectionID, $sequenceID, $frames];
     }
 
-    private static function getBuffer(): ByteBuffer
+    private static function getWriter(): ByteBufferWriter
     {
-        if (Pack::$buf === null) {
-            Pack::$buf = new ByteBuffer();
+        if (Pack::$writeBuf === null) {
+            Pack::$writeBuf = new ByteBufferWriter();
         }
-        Pack::$buf->setReadOffset(0);
-        Pack::$buf->setWriteOffset(0);
-        Pack::$buf->clear();
-        return Pack::$buf;
+        Pack::$writeBuf->setOffset(0);
+        Pack::$writeBuf->clear();
+        return Pack::$writeBuf;
     }
 }
