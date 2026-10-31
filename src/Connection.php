@@ -30,12 +30,18 @@ abstract class Connection
      * d'acquitter les faisait croitre jusqu'a epuiser la memoire du thread reseau, ce qui tuait
      * le processus entier plutot que la seule connexion fautive.
      *
-     * 8 Mio represente environ 5 800 paquets a la MTU maximale, soit plusieurs centaines de fois
-     * ce qu'une connexion saine retient : une connexion qui atteint ce seuil n'emet deja plus
-     * depuis longtemps. Le choix est deliberement large pour ne jamais fermer un pair lent, et
-     * ne sert que de filet contre l'emballement.
+     * Attention a l'echelle : une connexion ne porte pas un joueur mais un pair entier. Les
+     * sessions sont des flux multiplexes dessus, donc ce plafond est un budget global, pas un
+     * budget par joueur. Un banc a 550 bots se connectant en rafale y a fait transiter jusqu'a
+     * 9 Mio tout a fait legitimes — un premier essai a 8 Mio fermait la connexion en pleine
+     * arrivee et jetait tout le monde.
+     *
+     * 128 Mio laissent donc quatorze fois cette pointe mesuree, tout en gardant quatre
+     * connexions simultanees sous la limite de 512 Mio du thread. Au-dela, la connexion n'emet
+     * plus depuis longtemps : la fermer coute une redial du proxy, contre un processus mort si
+     * on la laisse remplir la memoire.
      */
-    private const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
+    private const MAX_BUFFERED_BYTES = 128 * 1024 * 1024;
 
     protected readonly AckQueue $ack;
     protected readonly Sender $sender;
