@@ -49,6 +49,20 @@ final class ServerConnection extends Connection
         }
     }
 
+    /**
+     * Repond a une demande de connexion rejouee.
+     *
+     * Le chemin normal ne suffit pas : la demande rejouee porte la meme sequence que
+     * l'originale, donc la file de reception la rejette comme doublon et handle() n'est jamais
+     * atteint. Le client cesserait alors de reessayer, acquitte, sans avoir recu la reponse
+     * qu'il attend — et echouerait sur son delai de garde.
+     */
+    public function resendConnectionResponse(): void
+    {
+        $this->logger->log("connection_response_resend", "connectionID", $this->connectionID);
+        $this->writeControl(ConnectionResponse::create($this->connectionID, ConnectionResponse::CONNECTION_RESPONSE_SUCCESS), true);
+    }
+
     public function handle(int $now, Frame $fr): void
     {
         match (true) {
