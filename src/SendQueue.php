@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace cooldogedev\spectral;
 
-use pmmp\encoding\ByteBuffer;
+use pmmp\encoding\ByteBufferWriter;
 use function array_shift;
 use function count;
 use function min;
@@ -14,11 +14,12 @@ final class SendQueue
 {
     private array $queue = [];
     private int $mss = Protocol::MIN_PACKET_SIZE;
-    private ByteBuffer $pk;
+    private int $queuedBytes = 0;
+    private ByteBufferWriter $pk;
 
     public function __construct()
     {
-        $this->pk = new ByteBuffer();
+        $this->pk = new ByteBufferWriter();
         $this->pk->reserve(Protocol::MAX_PACKET_SIZE);
     }
 
@@ -40,6 +41,18 @@ final class SendQueue
     public function add(string $payload): void
     {
         $this->queue[] = $payload;
+        $this->queuedBytes += strlen($payload);
+    }
+
+    /**
+     * Octets en attente d'emission. Rien ne borne cette file : l'application ecrit a sa guise
+     * tandis que pack() ne sort que ce que la fenetre de congestion autorise. Quand le lien vers
+     * le pair bouchonne, c'est ici que la memoire s'accumule, et l'appelant s'en sert donc comme
+     * garde-fou.
+     */
+    public function getQueuedBytes(): int
+    {
+        return $this->queuedBytes;
     }
 
     public function pack(int $window): ?string
@@ -55,16 +68,16 @@ final class SendQueue
                 break;
             }
             array_shift($this->queue);
+            $this->queuedBytes -= strlen($entry);
             $this->pk->writeByteArray($entry);
         }
-        return $this->pk->toString();
+        return $this->pk->getData();
     }
 
     public function flush(): void
     {
         $this->pk->clear();
-        $this->pk->setReadOffset(0);
-        $this->pk->setWriteOffset(0);
+        $this->pk->setOffset(0);
     }
 
     public function clear(): void
@@ -72,5 +85,6 @@ final class SendQueue
         $this->pk->clear();
         $this->pk->trim();
         $this->queue = [];
+        $this->queuedBytes = 0;
     }
 }

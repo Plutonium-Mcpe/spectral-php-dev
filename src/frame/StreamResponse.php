@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace cooldogedev\spectral\frame;
 
-use pmmp\encoding\ByteBuffer;
+use pmmp\encoding\Byte;
+use pmmp\encoding\ByteBufferReader;
+use pmmp\encoding\ByteBufferWriter;
+use pmmp\encoding\LE;
 
 final class StreamResponse extends Frame
 {
@@ -27,15 +30,15 @@ final class StreamResponse extends Frame
         return FrameIds::STREAM_RESPONSE;
     }
 
-    public function encode(ByteBuffer $buf): void
+    public function encode(ByteBufferWriter $buf): void
     {
-        $buf->writeSignedLongLE($this->streamID);
-        $buf->writeUnsignedByte($this->response);
+		LE::writeSignedLong($buf, $this->streamID);
+		Byte::writeUnsigned($buf, $this->response);
     }
 
-    public function decode(ByteBuffer $buf): void
+    public function decode(ByteBufferReader $buf): void
     {
-        $this->streamID = $buf->readSignedLongLE();
-        $this->response = $buf->readUnsignedByte();
+		$this->streamID = LE::readSignedLong($buf);
+		$this->response = Byte::readUnsigned($buf);
     }
 }

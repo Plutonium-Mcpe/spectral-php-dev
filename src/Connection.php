@@ -24,6 +24,23 @@ abstract class Connection
 {
     private const CONNECTION_ACTIVITY_TIMEOUT = Time::SECOND * 30;
 
+    /**
+     * Plafond memoire d'une seule connexion, somme de ce qui attend d'etre emis et de ce qui
+     * attend d'etre acquitte. Aucune des deux files n'etait bornee : un pair qui cesse de lire
+     * ou d'acquitter les faisait croitre sans limite.
+     *
+     * Attention a l'echelle : une connexion ne porte pas un joueur mais un pair entier, les
+     * sessions etant des flux multiplexes dessus. Un banc a 550 bots y a fait transiter 9 Mio
+     * tout a fait legitimes pendant une rafale d'arrivees, et un premier essai a 8 Mio fermait
+     * la connexion en pleine arrivee.
+     *
+     * Ce plafond ne protege PAS la memoire du thread, seulement les autres connexions contre
+     * une voisine qui s'emballe : un banc a 550 bots sur trois proxies a tue le thread a 512
+     * Mio sans qu'aucune des trois connexions n'atteigne jamais ses 128 Mio. La limite du
+     * thread est tenue par le budget global du listener, voir Listener::setMemoryBudget().
+     */
+    private const MAX_BUFFERED_BYTES = 128 * 1024 * 1024;
+
     protected readonly AckQueue $ack;
     protected readonly Sender $sender;
     protected readonly ReceiveQueue $receiveQueue;
@@ -39,6 +56,15 @@ abstract class Connection
     protected int $idle = 0;
 
     protected bool $closed = false;
+
+    /**
+     * Raison de la fermeture, pour que le listener puisse la comptabiliser.
+     *
+     * Le journal de spectral est un NopLogger tant que SLOG_DIR n'est pas defini : personne
+     * n'active cette variable en production, donc aucune fermeture n'y laissait de trace et
+     * l'hote ne pouvait pas savoir si ses garde-fous servaient a quelque chose.
+     */
+    protected ?string $closeReason = null;
 
     public function __construct(protected readonly Conn $conn, public int $connectionID, int $perspective)
     {
@@ -59,6 +85,21 @@ abstract class Connection
         $this->idle = $now + Connection::CONNECTION_ACTIVITY_TIMEOUT;
     }
 
+    /**
+     * Octets retenus par cette connexion : ce qui attend d'etre emis et ce qui attend d'etre
+     * acquitte. Le listener en fait la somme sur toutes ses connexions, parce que c'est cette
+     * somme, et non le chiffre d'une seule, qui epuise la memoire du thread.
+     */
+    public function getCloseReason(): ?string
+    {
+        return $this->closeReason;
+    }
+
+    public function getBufferedBytes(): int
+    {
+        return $this->sendQueue->getQueuedBytes() + $this->retransmission->getQueuedBytes();
+    }
+
     public function getLocalAddress(): Address
     {
         return $this->conn->localAddress;
@@ -71,6 +112,7 @@ abstract class Connection
 
     public function closeWithError(int $code, string $message): void
     {
+        $this->closeReason = $message;
         $this->logger->log("connection_close_err", "code", $code, "message", $message);
         $this->writeControl(ConnectionClose::create($code, $message), true);
         $this->internalClose();
@@ -85,6 +127,11 @@ abstract class Connection
         $now = Time::unixNano();
         if ($now >= $this->idle) {
             $this->closeWithError(ConnectionClose::CONNECTION_CLOSE_TIMEOUT, "network inactivity");
+            return false;
+        }
+        $buffered = $this->getBufferedBytes();
+        if ($buffered > Connection::MAX_BUFFERED_BYTES) {
+            $this->closeWithError(ConnectionClose::CONNECTION_CLOSE_TIMEOUT, "buffer overflow: " . $buffered . " bytes");
             return false;
         }
         $this->retransmit($now);

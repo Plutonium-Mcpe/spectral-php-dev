@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace cooldogedev\spectral\frame;
 
-use pmmp\encoding\ByteBuffer;
+use pmmp\encoding\ByteBufferReader;
+use pmmp\encoding\ByteBufferWriter;
 
 final class ConnectionRequest extends Frame
 {
@@ -18,7 +19,7 @@ final class ConnectionRequest extends Frame
         return FrameIds::CONNECTION_REQUEST;
     }
 
-    public function encode(ByteBuffer $buf): void {}
+    public function encode(ByteBufferWriter $buf): void {}
 
-    public function decode(ByteBuffer $buf): void {}
+    public function decode(ByteBufferReader $buf): void {}
 }

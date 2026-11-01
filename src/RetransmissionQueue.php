@@ -8,7 +8,7 @@ use cooldogedev\spectral\util\Time;
 use function array_key_first;
 use function count;
 use function min;
-use function uasort;
+use function strlen;
 
 final class RetransmissionQueue
 {
@@ -24,14 +24,22 @@ final class RetransmissionQueue
     private const MAX_BACKOFF = Time::SECOND;
 
     /**
+     * Ordonnee par `sent` croissant, du plus ancien envoi au plus recent : `shift()` lit la tete
+     * avec `array_key_first()`. L'ordre est tenu par construction plutot que par un tri — voir
+     * `moveToTail()` — car un `uasort()` a chaque ajout et a chaque retrait rendait l'emission
+     * quadratique, et cette file vit sur le thread reseau.
+     *
      * @var array<int, RetransmissionEntry>
      */
     private array $queue = [];
 
+    private int $queuedBytes = 0;
+
     public function add(int $now, int $sequenceID, string $data): void
     {
+        unset($this->queue[$sequenceID]);
         $this->queue[$sequenceID] = new RetransmissionEntry($data, $now);
-        $this->sort();
+        $this->queuedBytes += strlen($data);
     }
 
     public function remove(int $sequenceID): ?RetransmissionEntry
@@ -39,10 +47,20 @@ final class RetransmissionQueue
         $entry = $this->queue[$sequenceID] ?? null;
         if ($entry !== null) {
             unset($this->queue[$sequenceID]);
-            $this->sort();
+            $this->queuedBytes -= strlen($entry->payload);
             return $entry;
         }
         return null;
+    }
+
+    /**
+     * Octets retenus en attente d'acquittement. L'appelant s'en sert comme garde-fou memoire :
+     * une connexion dont le pair n'acquitte plus retient tout ce qu'elle a envoye jusqu'a
+     * expiration des tentatives, et rien d'autre ne borne ce volume.
+     */
+    public function getQueuedBytes(): int
+    {
+        return $this->queuedBytes;
     }
 
     /**
@@ -69,9 +87,10 @@ final class RetransmissionQueue
             $entry->backoff = min($waitFor * 2, RetransmissionQueue::MAX_BACKOFF);
             if ($entry->attempts >= RetransmissionQueue::RETRANSMISSION_ATTEMPTS) {
                 unset($this->queue[$sequenceID]);
+                $this->queuedBytes -= strlen($entry->payload);
                 return [$sent, $entry->payload, true];
             }
-            $this->sort();
+            $this->moveToTail($sequenceID, $entry);
             return [$sent, $entry->payload, false];
         }
         return null;
@@ -80,10 +99,17 @@ final class RetransmissionQueue
     public function clear(): void
     {
         $this->queue = [];
+        $this->queuedBytes = 0;
     }
 
-    private function sort(): void
+    /**
+     * Replace l'entree en queue apres un renvoi. Son `sent` vient d'etre porte a `$now`, donc
+     * elle est desormais la plus recente : la retirer puis la reinserer lui donne la derniere
+     * place, et l'ordre par `sent` croissant tient sans retrier quoi que ce soit.
+     */
+    private function moveToTail(int $sequenceID, RetransmissionEntry $entry): void
     {
-        uasort($this->queue, static fn(RetransmissionEntry $a, RetransmissionEntry $b): int => $a->sent <=> $b->sent);
+        unset($this->queue[$sequenceID]);
+        $this->queue[$sequenceID] = $entry;
     }
 }
