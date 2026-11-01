@@ -28,6 +28,21 @@ use const SOL_UDP;
 final class Listener
 {
     /**
+     * Budget memoire de l'ensemble des connexions du listener.
+     *
+     * Le plafond par connexion de Connection ne peut pas tenir la limite du thread qui heberge
+     * le listener : trois connexions a 130 Mio restent chacune sous leurs 128 Mio et tuent
+     * pourtant un thread limite a 512 Mio. C'est ce qui s'est produit sur un banc a 550 bots
+     * et trois proxies, ou la memoire du thread est montee a 508 Mio sans qu'aucun plafond par
+     * connexion ne se declenche.
+     *
+     * La valeur par defaut vise un thread a 512 Mio et laisse de quoi decoder, journaliser et
+     * tenir les sessions a cote des files. L'hote qui connait sa propre limite la remplace par
+     * setMemoryBudget().
+     */
+    public const DEFAULT_MEMORY_BUDGET = 192 * 1024 * 1024;
+
+    /**
      * @var array<int, ServerConnection>
      */
     private array $connections = [];
@@ -50,6 +65,8 @@ final class Listener
     private Address $localAddress;
 
     private bool $closed = false;
+
+    private int $memoryBudget = Listener::DEFAULT_MEMORY_BUDGET;
 
     private function __construct(private readonly string $address, private readonly int $port)
     {
@@ -80,6 +97,15 @@ final class Listener
     public function setConnectionAcceptor(?Closure $connectionAcceptor): void
     {
         $this->connectionAcceptor = $connectionAcceptor;
+    }
+
+    /**
+     * Fixe le budget memoire cumule des connexions. A regler en dessous de la limite memoire
+     * du thread qui fait tourner ce listener, en gardant de quoi loger tout le reste.
+     */
+    public function setMemoryBudget(int $bytes): void
+    {
+        $this->memoryBudget = $bytes;
     }
 
     public function registerSocket(Socket $socket, Closure $handler): void
@@ -130,10 +156,27 @@ final class Listener
 
     private function tickConnections(): void
     {
+        $total = 0;
+        $worstID = null;
+        $worstBytes = 0;
         foreach ($this->connections as $connectionID => $connection) {
             if (!$connection->tick()) {
                 unset($this->connections[$connectionID]);
+                continue;
             }
+            $buffered = $connection->getBufferedBytes();
+            $total += $buffered;
+            if ($buffered > $worstBytes) {
+                $worstBytes = $buffered;
+                $worstID = $connectionID;
+            }
+        }
+
+        if ($total > $this->memoryBudget && $worstID !== null) {
+            $connection = $this->connections[$worstID];
+            $connection->logger->log("memory_budget_exceeded", "total", $total, "budget", $this->memoryBudget, "connection", $worstBytes);
+            $connection->closeWithError(ConnectionClose::CONNECTION_CLOSE_TIMEOUT, "memory budget exceeded: " . $total . " bytes buffered across the listener");
+            unset($this->connections[$worstID]);
         }
     }
 

@@ -25,21 +25,19 @@ abstract class Connection
     private const CONNECTION_ACTIVITY_TIMEOUT = Time::SECOND * 30;
 
     /**
-     * Plafond memoire par connexion, somme de ce qui attend d'etre emis et de ce qui attend
-     * d'etre acquitte. Aucune des deux files n'etait bornee : un pair qui cesse de lire ou
-     * d'acquitter les faisait croitre jusqu'a epuiser la memoire du thread reseau, ce qui tuait
-     * le processus entier plutot que la seule connexion fautive.
+     * Plafond memoire d'une seule connexion, somme de ce qui attend d'etre emis et de ce qui
+     * attend d'etre acquitte. Aucune des deux files n'etait bornee : un pair qui cesse de lire
+     * ou d'acquitter les faisait croitre sans limite.
      *
-     * Attention a l'echelle : une connexion ne porte pas un joueur mais un pair entier. Les
-     * sessions sont des flux multiplexes dessus, donc ce plafond est un budget global, pas un
-     * budget par joueur. Un banc a 550 bots se connectant en rafale y a fait transiter jusqu'a
-     * 9 Mio tout a fait legitimes — un premier essai a 8 Mio fermait la connexion en pleine
-     * arrivee et jetait tout le monde.
+     * Attention a l'echelle : une connexion ne porte pas un joueur mais un pair entier, les
+     * sessions etant des flux multiplexes dessus. Un banc a 550 bots y a fait transiter 9 Mio
+     * tout a fait legitimes pendant une rafale d'arrivees, et un premier essai a 8 Mio fermait
+     * la connexion en pleine arrivee.
      *
-     * 128 Mio laissent donc quatorze fois cette pointe mesuree, tout en gardant quatre
-     * connexions simultanees sous la limite de 512 Mio du thread. Au-dela, la connexion n'emet
-     * plus depuis longtemps : la fermer coute une redial du proxy, contre un processus mort si
-     * on la laisse remplir la memoire.
+     * Ce plafond ne protege PAS la memoire du thread, seulement les autres connexions contre
+     * une voisine qui s'emballe : un banc a 550 bots sur trois proxies a tue le thread a 512
+     * Mio sans qu'aucune des trois connexions n'atteigne jamais ses 128 Mio. La limite du
+     * thread est tenue par le budget global du listener, voir Listener::setMemoryBudget().
      */
     private const MAX_BUFFERED_BYTES = 128 * 1024 * 1024;
 
@@ -78,6 +76,16 @@ abstract class Connection
         $this->idle = $now + Connection::CONNECTION_ACTIVITY_TIMEOUT;
     }
 
+    /**
+     * Octets retenus par cette connexion : ce qui attend d'etre emis et ce qui attend d'etre
+     * acquitte. Le listener en fait la somme sur toutes ses connexions, parce que c'est cette
+     * somme, et non le chiffre d'une seule, qui epuise la memoire du thread.
+     */
+    public function getBufferedBytes(): int
+    {
+        return $this->sendQueue->getQueuedBytes() + $this->retransmission->getQueuedBytes();
+    }
+
     public function getLocalAddress(): Address
     {
         return $this->conn->localAddress;
@@ -106,7 +114,7 @@ abstract class Connection
             $this->closeWithError(ConnectionClose::CONNECTION_CLOSE_TIMEOUT, "network inactivity");
             return false;
         }
-        $buffered = $this->sendQueue->getQueuedBytes() + $this->retransmission->getQueuedBytes();
+        $buffered = $this->getBufferedBytes();
         if ($buffered > Connection::MAX_BUFFERED_BYTES) {
             $this->closeWithError(ConnectionClose::CONNECTION_CLOSE_TIMEOUT, "buffer overflow: " . $buffered . " bytes");
             return false;
