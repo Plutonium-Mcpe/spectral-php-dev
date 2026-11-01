@@ -14,6 +14,7 @@ use cooldogedev\spectral\util\OS;
 use cooldogedev\spectral\util\UDP;
 use RuntimeException;
 use Socket;
+use function count;
 use function socket_bind;
 use function socket_create;
 use function socket_getsockname;
@@ -97,6 +98,25 @@ final class Listener
     public function setConnectionAcceptor(?Closure $connectionAcceptor): void
     {
         $this->connectionAcceptor = $connectionAcceptor;
+    }
+
+    /**
+     * Octets retenus par l'ensemble des connexions. Publie pour que l'hote puisse comparer ce
+     * chiffre a la memoire reelle de son thread : un ecart dit que la memoire s'accumule
+     * ailleurs que dans les files du transport.
+     */
+    public function getBufferedBytesTotal(): int
+    {
+        $total = 0;
+        foreach ($this->connections as $connection) {
+            $total += $connection->getBufferedBytes();
+        }
+        return $total;
+    }
+
+    public function getConnectionCount(): int
+    {
+        return count($this->connections);
     }
 
     /**
