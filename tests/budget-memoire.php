@@ -77,6 +77,9 @@ function preparer(array $tailles, int $budget): array
     $champ->setValue($listener, $budget);
     $champ = $reflexion->getProperty("closed");
     $champ->setValue($listener, false);
+    foreach (["budgetClosures", "overflowClosures", "timeoutClosures"] as $compteur) {
+        $reflexion->getProperty($compteur)->setValue($listener, 0);
+    }
 
     return [$connexions, $listener];
 }
@@ -102,6 +105,7 @@ tick($listener);
 $fermees = array_filter($connexions, static fn (ConnexionFactice $c): bool => $c->fermee);
 $verifier("trois connexions sous leur plafond, somme au-dessus : une fermeture", count($fermees) === 1);
 $verifier("la fermeture cite le budget du listener", str_contains(reset($fermees)->raison ?: "", "memory budget exceeded"));
+$verifier("le declenchement est comptabilise et donc observable", $listener->getClosureCounts()["budget"] === 1);
 
 [$connexions, $listener] = preparer([0 => 10 * $mio, 1 => 150 * $mio, 2 => 90 * $mio], 192 * $mio);
 tick($listener);
@@ -110,6 +114,7 @@ $verifier("c'est la plus grosse qui tombe, pas une voisine", $connexions[1]->fer
 [$connexions, $listener] = preparer([0 => 60 * $mio, 1 => 60 * $mio, 2 => 60 * $mio], 192 * $mio);
 tick($listener);
 $verifier("sous le budget, personne n'est ferme", count(array_filter($connexions, static fn (ConnexionFactice $c): bool => $c->fermee)) === 0);
+$verifier("et rien n'est comptabilise", $listener->getClosureCounts()["budget"] === 0);
 
 [$connexions, $listener] = preparer([0 => 500 * $mio], 192 * $mio);
 tick($listener);

@@ -15,6 +15,7 @@ use cooldogedev\spectral\util\UDP;
 use RuntimeException;
 use Socket;
 use function count;
+use function str_starts_with;
 use function socket_bind;
 use function socket_create;
 use function socket_getsockname;
@@ -91,6 +92,14 @@ final class Listener
 
     private int $memoryBudget = Listener::DEFAULT_MEMORY_BUDGET;
 
+    /**
+     * Comptes de fermetures par cause, publies pour l'hote. Un garde-fou dont on ne peut pas
+     * verifier qu'il s'est declenche ne vaut pas mieux qu'une absence de garde-fou.
+     */
+    private int $budgetClosures = 0;
+    private int $overflowClosures = 0;
+    private int $timeoutClosures = 0;
+
     private function __construct(private readonly string $address, private readonly int $port)
     {
         $this->registerSockets();
@@ -139,6 +148,18 @@ final class Listener
     public function getConnectionCount(): int
     {
         return count($this->connections);
+    }
+
+    /**
+     * @return array{budget: int, overflow: int, timeout: int}
+     */
+    public function getClosureCounts(): array
+    {
+        return [
+            "budget" => $this->budgetClosures,
+            "overflow" => $this->overflowClosures,
+            "timeout" => $this->timeoutClosures,
+        ];
     }
 
     /**
@@ -203,6 +224,12 @@ final class Listener
         $worstBytes = 0;
         foreach ($this->connections as $connectionID => $connection) {
             if (!$connection->tick()) {
+                $raison = $connection->getCloseReason();
+                if ($raison !== null && str_starts_with($raison, "buffer overflow")) {
+                    $this->overflowClosures++;
+                } elseif ($raison !== null) {
+                    $this->timeoutClosures++;
+                }
                 $this->forget($connectionID);
                 continue;
             }
@@ -218,6 +245,7 @@ final class Listener
             $connection = $this->connections[$worstID];
             $connection->logger->log("memory_budget_exceeded", "total", $total, "budget", $this->memoryBudget, "connection", $worstBytes);
             $connection->closeWithError(ConnectionClose::CONNECTION_CLOSE_TIMEOUT, "memory budget exceeded: " . $total . " bytes buffered across the listener");
+            $this->budgetClosures++;
             $this->forget($worstID);
         }
     }

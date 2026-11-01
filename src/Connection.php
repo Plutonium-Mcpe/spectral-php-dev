@@ -57,6 +57,15 @@ abstract class Connection
 
     protected bool $closed = false;
 
+    /**
+     * Raison de la fermeture, pour que le listener puisse la comptabiliser.
+     *
+     * Le journal de spectral est un NopLogger tant que SLOG_DIR n'est pas defini : personne
+     * n'active cette variable en production, donc aucune fermeture n'y laissait de trace et
+     * l'hote ne pouvait pas savoir si ses garde-fous servaient a quelque chose.
+     */
+    protected ?string $closeReason = null;
+
     public function __construct(protected readonly Conn $conn, public int $connectionID, int $perspective)
     {
         $now = Time::unixNano();
@@ -81,6 +90,11 @@ abstract class Connection
      * acquitte. Le listener en fait la somme sur toutes ses connexions, parce que c'est cette
      * somme, et non le chiffre d'une seule, qui epuise la memoire du thread.
      */
+    public function getCloseReason(): ?string
+    {
+        return $this->closeReason;
+    }
+
     public function getBufferedBytes(): int
     {
         return $this->sendQueue->getQueuedBytes() + $this->retransmission->getQueuedBytes();
@@ -98,6 +112,7 @@ abstract class Connection
 
     public function closeWithError(int $code, string $message): void
     {
+        $this->closeReason = $message;
         $this->logger->log("connection_close_err", "code", $code, "message", $message);
         $this->writeControl(ConnectionClose::create($code, $message), true);
         $this->internalClose();
